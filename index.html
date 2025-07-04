@@ -1,24 +1,47 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Textab Video Generator</title>
 </head>
 <body>
-    <h1>Textab\</h1>
+    <h1>Textab Video Generator</h1>
     
-    <h2>Setup</h2>
-    <form id="setupForm">
+    <h2>API Configuration</h2>
+    <form id="apiForm">
         <p>
-            <label>OpenAI API Key:</label><br>
-            <input type="password" id="apiKey" size="60" placeholder="sk-proj-...">
-            <button type="button" onclick="testApiKey()">Test Key</button>
+            <label>Choose AI Provider:</label><br>
+            <input type="radio" id="openai" name="provider" value="openai" checked>
+            <label for="openai">OpenAI (GPT-4)</label><br>
+            <input type="radio" id="gemini" name="provider" value="gemini">
+            <label for="gemini">Google Gemini</label>
         </p>
+        
+        <div id="openai-config">
+            <p>
+                <label>OpenAI API Key:</label><br>
+                <input type="password" id="openaiKey" size="60" placeholder="sk-proj-...">
+            </p>
+        </div>
+        
+        <div id="gemini-config" style="display:none;">
+            <p>
+                <label>Gemini API Key:</label><br>
+                <input type="password" id="geminiKey" size="60" placeholder="AIza...">
+            </p>
+        </div>
+        
+        <p>
+            <button type="button" onclick="testApiKey()">Test API Key</button>
+        </p>
+        
         <div id="apiStatus"></div>
     </form>
     
     <hr>
     
-    <h2>Create Your Video</h2>
+    <h2>Video Generation</h2>
     <form id="videoForm">
         <p>
             <label>Describe your video:</label><br>
@@ -38,89 +61,210 @@
     <div id="codeOutput" style="display:none;">
         <h3>Generated Remotion Code:</h3>
         <pre id="generatedCode"></pre>
+        <button onclick="copyCode()">Copy Code</button>
     </div>
     
     <div id="videoOutput" style="display:none;">
-        <h3>Your Video:</h3>
+        <h3>Your Video Preview:</h3>
         <canvas id="videoCanvas" width="1280" height="720"></canvas>
         <br><br>
-        <button onclick="downloadVideo()">Download Video</button>
+        <button onclick="downloadVideo()">Download Video Frame</button>
+        <button onclick="regenerateVideo()">Generate Another Video</button>
     </div>
 
+    <hr>
+    
+    <footer>
+        <p>© 2025 Textab Inc. All rights reserved.</p>
+    </footer>
+
     <script>
-        let userApiKey = '';
+        // Global variables
+        let currentApiKey = '';
+        let currentProvider = 'openai';
         let currentVideoData = null;
+        
+        // Configuration objects
+        const apiConfig = {
+            openai: {
+                testEndpoint: 'https://api.openai.com/v1/models',
+                chatEndpoint: 'https://api.openai.com/v1/chat/completions',
+                model: 'gpt-4',
+                headers: (key) => ({
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${key}`
+                })
+            },
+            gemini: {
+                testEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
+                chatEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent',
+                model: 'gemini-1.5-flash-latest',
+                headers: (key) => ({
+                    'Content-Type': 'application/json'
+                })
+            }
+        };
+
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeApp();
+            setupEventListeners();
+        });
+
+        function initializeApp() {
+            // Pre-fill example description
+            document.getElementById('videoDescription').value = 'Create a 4-second video with a dark gradient background. Show the text "Welcome to the Future" in large white letters that slides in smoothly from the left side of the screen.';
+            
+            // Try to load stored API keys
+            loadStoredApiKeys();
+        }
+
+        function setupEventListeners() {
+            // Provider selection
+            document.querySelectorAll('input[name="provider"]').forEach(radio => {
+                radio.addEventListener('change', handleProviderChange);
+            });
+        }
+
+        function handleProviderChange(event) {
+            currentProvider = event.target.value;
+            
+            // Hide all config sections
+            document.getElementById('openai-config').style.display = 'none';
+            document.getElementById('gemini-config').style.display = 'none';
+            
+            // Show selected config
+            document.getElementById(currentProvider + '-config').style.display = 'block';
+            
+            // Reset API status
+            document.getElementById('apiStatus').innerHTML = '';
+            document.getElementById('generateBtn').disabled = true;
+            currentApiKey = '';
+        }
+
+        function loadStoredApiKeys() {
+            // Load stored keys (if any)
+            const storedOpenAI = sessionStorage.getItem('openai_api_key');
+            const storedGemini = sessionStorage.getItem('gemini_api_key');
+            
+            if (storedOpenAI) {
+                document.getElementById('openaiKey').value = storedOpenAI;
+            }
+            if (storedGemini) {
+                document.getElementById('geminiKey').value = storedGemini;
+            }
+        }
 
         async function testApiKey() {
-            const apiKey = document.getElementById('apiKey').value.trim();
+            const keyInput = document.getElementById(currentProvider + 'Key');
+            const apiKey = keyInput.value.trim();
             
             if (!apiKey) {
-                document.getElementById('apiStatus').innerHTML = '<p style="color:red;">Please enter your API key.</p>';
+                updateApiStatus('Please enter your API key.', 'error');
                 return;
             }
 
-            document.getElementById('apiStatus').innerHTML = '<p>Testing API key...</p>';
+            updateApiStatus('Testing API key...', 'info');
 
             try {
-                const response = await fetch('https://api.openai.com/v1/models', {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${apiKey}`
-                    }
-                });
-
-                if (response.ok) {
-                    userApiKey = apiKey;
-                    document.getElementById('apiStatus').innerHTML = '<p style="color:green;">✓ API key is valid and working!</p>';
+                const isValid = await validateApiKey(currentProvider, apiKey);
+                
+                if (isValid) {
+                    currentApiKey = apiKey;
+                    updateApiStatus('✓ API key is valid and working!', 'success');
                     document.getElementById('generateBtn').disabled = false;
-                    // Store in sessionStorage for this session
-                    sessionStorage.setItem('openai_api_key', apiKey);
+                    
+                    // Store in sessionStorage
+                    sessionStorage.setItem(currentProvider + '_api_key', apiKey);
                 } else {
-                    const errorData = await response.json();
-                    document.getElementById('apiStatus').innerHTML = `<p style="color:red;">✗ API key error: ${errorData.error?.message || 'Invalid key'}</p>`;
+                    updateApiStatus('✗ API key is invalid or expired.', 'error');
                     document.getElementById('generateBtn').disabled = true;
                 }
             } catch (error) {
-                document.getElementById('apiStatus').innerHTML = '<p style="color:red;">✗ Network error. Please check your connection.</p>';
+                updateApiStatus(`✗ Error testing API key: ${error.message}`, 'error');
                 document.getElementById('generateBtn').disabled = true;
             }
+        }
+
+        async function validateApiKey(provider, apiKey) {
+            const config = apiConfig[provider];
+            
+            if (provider === 'openai') {
+                const response = await fetch(config.testEndpoint, {
+                    method: 'GET',
+                    headers: config.headers(apiKey)
+                });
+                return response.ok;
+            } else if (provider === 'gemini') {
+                const response = await fetch(config.testEndpoint + '?key=' + apiKey, {
+                    method: 'GET',
+                    headers: config.headers(apiKey)
+                });
+                return response.ok;
+            }
+            
+            return false;
+        }
+
+        function updateApiStatus(message, type) {
+            const statusDiv = document.getElementById('apiStatus');
+            const colors = {
+                success: 'green',
+                error: 'red',
+                info: 'blue'
+            };
+            
+            statusDiv.innerHTML = `<p style="color:${colors[type] || 'black'};">${message}</p>`;
+        }
+
+        function updateStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            const colors = {
+                success: 'green',
+                error: 'red',
+                info: 'blue'
+            };
+            
+            statusDiv.innerHTML = `<p style="color:${colors[type]};">${message}</p>`;
         }
 
         async function generateVideo() {
             const description = document.getElementById('videoDescription').value.trim();
             
             if (!description) {
-                document.getElementById('status').innerHTML = '<p style="color:red;">Please describe your video.</p>';
+                updateStatus('Please describe your video.', 'error');
                 return;
             }
 
-            if (!userApiKey) {
-                document.getElementById('status').innerHTML = '<p style="color:red;">Please test your API key first.</p>';
+            if (!currentApiKey) {
+                updateStatus('Please test your API key first.', 'error');
                 return;
             }
 
-            document.getElementById('status').innerHTML = '<p>Generating your video...</p>';
+            // Reset output sections
             document.getElementById('codeOutput').style.display = 'none';
             document.getElementById('videoOutput').style.display = 'none';
+            
+            updateStatus('Generating your video...', 'info');
 
             try {
-                // Step 1: Generate Remotion code
+                // Generate Remotion code
                 const remotionCode = await generateRemotionCode(description);
                 
-                // Display the generated code
+                // Display generated code
                 document.getElementById('generatedCode').textContent = remotionCode;
                 document.getElementById('codeOutput').style.display = 'block';
                 
-                document.getElementById('status').innerHTML = '<p>Code generated! Rendering video...</p>';
+                updateStatus('Code generated! Rendering video preview...', 'info');
                 
-                // Step 2: Render video
+                // Render video preview
                 await renderVideoFromCode(remotionCode);
                 
-                document.getElementById('status').innerHTML = '<p style="color:green;">✓ Video generated successfully!</p>';
+                updateStatus('✓ Video generated successfully!', 'success');
                 
             } catch (error) {
                 console.error('Error:', error);
-                document.getElementById('status').innerHTML = '<p style="color:red;">Error: ' + error.message + '</p>';
+                updateStatus(`Error: ${error.message}`, 'error');
             }
         }
 
@@ -204,14 +348,22 @@ Requirements:
 - Duration should match the description or be 3-5 seconds if not specified
 - Include proper easing and timing for animations`;
 
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            if (currentProvider === 'openai') {
+                return await generateWithOpenAI(systemPrompt, userPrompt);
+            } else if (currentProvider === 'gemini') {
+                return await generateWithGemini(systemPrompt, userPrompt);
+            }
+            
+            throw new Error('Invalid provider selected');
+        }
+
+        async function generateWithOpenAI(systemPrompt, userPrompt) {
+            const config = apiConfig.openai;
+            const response = await fetch(config.chatEndpoint, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${userApiKey}`
-                },
+                headers: config.headers(currentApiKey),
                 body: JSON.stringify({
-                    model: 'gpt-4',
+                    model: config.model,
                     messages: [
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userPrompt }
@@ -230,21 +382,47 @@ Requirements:
             return data.choices[0].message.content.trim();
         }
 
+        async function generateWithGemini(systemPrompt, userPrompt) {
+            const config = apiConfig.gemini;
+            const response = await fetch(config.chatEndpoint + '?key=' + currentApiKey, {
+                method: 'POST',
+                headers: config.headers(currentApiKey),
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: systemPrompt + '\n\n' + userPrompt
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.7,
+                        maxOutputTokens: 2000,
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(`Gemini API error: ${errorData.error?.message || response.statusText}`);
+            }
+
+            const data = await response.json();
+            return data.candidates[0].content.parts[0].text.trim();
+        }
+
         async function renderVideoFromCode(remotionCode) {
             // Parse the code to extract animation parameters
             const codeAnalysis = analyzeRemotionCode(remotionCode);
             
-            // Simulate rendering time
+            // Simulate processing time
             await new Promise(resolve => setTimeout(resolve, 1500));
             
-            // Render the video on canvas
+            // Render the video preview on canvas
             await renderVideoToCanvas(codeAnalysis);
         }
 
         function analyzeRemotionCode(code) {
-            // Extract key information from the generated code
             const analysis = {
-                duration: 90, // default 3 seconds
+                duration: 90, // default 3 seconds at 30fps
                 hasText: false,
                 textContent: '',
                 backgroundColor: '#1a1a2e',
@@ -262,14 +440,13 @@ Requirements:
                     const num = match.match(/\[0,\s*(\d+)\]/);
                     return num ? parseInt(num[1]) : 60;
                 });
-                analysis.duration = Math.max(...durations) * 1.5; // Extend for better demo
+                analysis.duration = Math.max(...durations) * 1.5;
             }
 
             // Parse text content
             const textMatches = code.match(/['"`]([^'"`]{3,50}?)['"`]/g);
             if (textMatches && textMatches.length > 0) {
                 analysis.hasText = true;
-                // Find the longest text (likely the main content)
                 analysis.textContent = textMatches.reduce((a, b) => a.length > b.length ? a : b).replace(/['"`]/g, '');
             }
 
@@ -291,7 +468,7 @@ Requirements:
                 analysis.fontSize = parseInt(fontSizeMatch[1]);
             }
 
-            // Check for animations
+            // Determine animation type
             if (code.includes('interpolate')) {
                 analysis.hasAnimation = true;
                 
@@ -318,7 +495,7 @@ Requirements:
             const ctx = canvas.getContext('2d');
             
             let frameIndex = 0;
-            const totalFrames = Math.min(analysis.duration, 180); // Cap at 6 seconds for demo
+            const totalFrames = Math.min(analysis.duration, 180); // Cap at 6 seconds
             
             function renderFrame() {
                 // Clear canvas
@@ -339,7 +516,7 @@ Requirements:
                     
                     // Apply animations
                     if (analysis.hasAnimation) {
-                        const progress = Math.min(1, frameIndex / 60); // 2 second animation
+                        const progress = Math.min(1, frameIndex / 60);
                         const easeProgress = easeInOutCubic(progress);
                         
                         switch (analysis.animationType) {
@@ -358,7 +535,7 @@ Requirements:
                             case 'rotate':
                                 rotation = easeProgress * Math.PI * 2;
                                 break;
-                            default: // fade
+                            default:
                                 opacity = easeProgress;
                         }
                     }
@@ -377,7 +554,7 @@ Requirements:
                 }
                 
                 // Add frame counter
-                ctx.fillStyle = 'rgba(255,255,255,0.5)';
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
                 ctx.font = '14px Arial';
                 ctx.textAlign = 'right';
                 ctx.fillText(`Frame ${frameIndex + 1}/${totalFrames}`, canvas.width - 10, 20);
@@ -404,32 +581,37 @@ Requirements:
             return t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
         }
 
+        function copyCode() {
+            const code = document.getElementById('generatedCode').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                alert('Code copied to clipboard!');
+            }).catch(err => {
+                console.error('Failed to copy code: ', err);
+            });
+        }
+
         function downloadVideo() {
             if (currentVideoData) {
                 const url = URL.createObjectURL(currentVideoData);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'ai-generated-video.png';
+                a.download = 'textab-video-frame.png';
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
             } else {
-                alert('No video available for download');
+                alert('No video frame available for download');
             }
         }
 
-        // Load stored API key on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            const storedKey = sessionStorage.getItem('openai_api_key');
-            if (storedKey) {
-                document.getElementById('apiKey').value = storedKey;
-                testApiKey();
-            }
-            
-            // Pre-fill example
-            document.getElementById('videoDescription').value = 'Create a 4-second video with a dark gradient background. Show the text "Welcome to the Future" in large white letters that slides in smoothly from the left side of the screen.';
-        });
+        function regenerateVideo() {
+            document.getElementById('videoDescription').value = '';
+            document.getElementById('codeOutput').style.display = 'none';
+            document.getElementById('videoOutput').style.display = 'none';
+            document.getElementById('status').innerHTML = '';
+            currentVideoData = null;
+        }
     </script>
 </body>
 </html>
